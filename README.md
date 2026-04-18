@@ -46,19 +46,44 @@ ______________________________________________________________________
 
 
 # Installtion
-Please run the following commands in the given order to install the dependency for **LIBERO**.
-```
-conda create -n libero python=3.8.13
-conda activate libero
-git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git
-cd LIBERO
-pip install -r requirements.txt
-pip install torch==1.11.0+cu113 torchvision==0.12.0+cu113 torchaudio==0.11.0 --extra-index-url https://download.pytorch.org/whl/cu113
+The repo is now standardized on a repo-local Python 3.12 environment for both dataset work and simulator-backed fine-tuning. This keeps system Python and system packages untouched while storing pip, Hugging Face, torch, and temporary build files on the same drive as the repository.
+
+```shell
+"$(pyenv prefix 3.12.12)"/bin/python3.12 -m venv .venv312
+source scripts/use-repo-env.sh
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision torchaudio
+python -m pip install numpy hydra-core wandb easydict transformers opencv-python bddl einops thop cloudpickle gym future
+python -m pip install h5py psutil tensorboard tensorboardX imageio imageio-ffmpeg matplotlib termcolor
+python -m pip install mujoco robosuite==1.4.0
+python -m pip install --no-deps robomimic==0.2.0
+python -m pip install -e .
 ```
 
-Then install the `libero` package:
+`source scripts/use-repo-env.sh` stores the active caches under `.cache/`, keeps LIBERO's config under `.libero/`, and points the default dataset location at `./datasets`.
+
+If your repository lives on a filesystem mounted with `noexec`, keep the caches in the repo but create the virtual environment on an exec-capable filesystem instead:
+
+```shell
+"$(pyenv prefix 3.12.12)"/bin/python3.12 -m venv "$HOME/.venvs/libero"
+LIBERO_VENV_PATH_OVERRIDE="$HOME/.venvs/libero" source scripts/use-repo-env.sh
+python -m pip install --upgrade pip setuptools wheel
 ```
-pip install -e .
+
+# Smoke Tests
+
+One optimizer step on a downloaded demo file:
+
+```shell
+source scripts/use-repo-env.sh
+python scripts/smoke_train_step.py --benchmark LIBERO_SPATIAL --task-id 0 --steps 1
+```
+
+Minimal simulator reset:
+
+```shell
+source scripts/use-repo-env.sh
+python scripts/smoke_env_reset.py --benchmark libero_spatial --task-id 0
 ```
 
 # Datasets
@@ -143,7 +168,7 @@ then run the following:
 ```shell
 export CUDA_VISIBLE_DEVICES=GPU_ID && \
 export MUJOCO_EGL_DEVICE_ID=GPU_ID && \
-python libero/lifelong/main.py seed=SEED \
+python -m libero.lifelong.main seed=SEED \
                                benchmark_name=BENCHMARK \
                                policy=POLICY \
                                lifelong=ALGO
@@ -155,14 +180,14 @@ Please see the documentation for the details of reproducing the study results.
 By default the policies will be evaluated on the fly during training. If you have limited computing resource of GPUs, we offer an evaluation script for you to evaluate models separately.
 
 ```shell
-python libero/lifelong/evaluate.py --benchmark BENCHMARK_NAME \
-                                   --task_id TASK_ID \ 
-                                   --algo ALGO_NAME \
-                                   --policy POLICY_NAME \
-                                   --seed SEED \
-                                   --ep EPOCH \
-                                   --load_task LOAD_TASK \
-                                   --device_id CUDA_ID
+python -m libero.lifelong.evaluate --benchmark BENCHMARK_NAME \
+                                    --task_id TASK_ID \ 
+                                    --algo ALGO_NAME \
+                                    --policy POLICY_NAME \
+                                    --seed SEED \
+                                    --ep EPOCH \
+                                    --load_task LOAD_TASK \
+                                    --device_id CUDA_ID
 ```
 
 # Citation

@@ -1,6 +1,11 @@
 *~
 .hydra
 *pyc
+.venv/
+.venv312/
+.venv314/
+.cache/
+.libero/
 datasets
 results
 outputs/*

@@ -10,7 +10,6 @@ import torch.multiprocessing as mp
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv, DummyVectorEnv
 from libero.libero.utils.time_utils import Timer
 from libero.libero.utils.video_utils import VideoWriter
 from libero.lifelong.utils import *
@@ -58,6 +57,14 @@ def evaluate_one_task_success(
                 evaluation, mainly for visualization and debugging purpose
     task_str:   the key to access sim_states dictionary
     """
+    try:
+        from libero.libero.envs import DummyVectorEnv, OffScreenRenderEnv, SubprocVectorEnv
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(
+            "Simulation dependencies are required for success evaluation. "
+            "Install robosuite and mujoco, or disable evaluation with eval.eval=false."
+        ) from exc
+
     with Timer() as t:
         if cfg.lifelong.algo == "PackNet":  # need preprocess weights for PackNet
             algo = algo.get_eval_algo(task_id)
@@ -104,7 +111,7 @@ def evaluate_one_task_success(
         init_states_path = os.path.join(
             cfg.init_states_folder, task.problem_folder, task.init_states_file
         )
-        init_states = torch.load(init_states_path)
+        init_states = torch.load(init_states_path, weights_only=False)
         num_success = 0
         for i in range(eval_loop_num):
             env.reset()
