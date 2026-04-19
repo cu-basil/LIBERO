@@ -16,13 +16,13 @@ matplotlib>=3.10.0
 # Simulation
 mujoco>=3.7.0
 robosuite>=1.5.0  # LIBERO updated for 1.5.x API (composite controllers, etc.)
-robomimic==0.2.0
+robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git@v0.4.0  # v0.4+ has robosuite 1.5 compat
 bddl>=3.6.0
 gymnasium>=1.0.0  # modern replacement for gym
 
 # OpenPI integration
-jax[cuda12]>=0.5.3
-flax>=0.10.2
+jax[cuda12]>=0.5.0,<0.6  # 0.6+ requires numpy 2.x
+flax>=0.10.0,<0.11
 safetensors>=0.7.0
 tyro>=1.0.0
 
