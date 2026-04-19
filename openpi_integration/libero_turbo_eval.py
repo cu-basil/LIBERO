@@ -71,6 +71,9 @@ class Args:
     num_steps_wait: int = 10
     num_trials_per_task: int = 50
     
+    # Multi-suite mode
+    all_suites: bool = False  # Run all 5 LIBERO suites
+    
     # Output
     video_out_path: str = "data/libero/videos"
     results_path: str = "docs/results"
@@ -309,15 +312,18 @@ def eval_libero_turbo(args: Args) -> None:
             # How many episodes in this batch
             batch_size = min(num_envs, args.num_trials_per_task - task_episodes)
             
-            # Reset and set initial states
+            # Reset and set initial states using vector-env API
             env.reset()
-            for i in range(batch_size):
-                init_idx = episode_batch_idx * num_envs + i
-                if init_idx < len(initial_states):
-                    env.envs[i].set_init_state(initial_states[init_idx])
-            
-            # Get initial observations
-            obs_list = [env.envs[i]._get_observations() for i in range(batch_size)]
+            init_indices = np.arange(episode_batch_idx * num_envs, episode_batch_idx * num_envs + batch_size)
+            valid_indices = init_indices[init_indices < len(initial_states)]
+            if len(valid_indices) > 0:
+                init_states_batch = [initial_states[idx] for idx in valid_indices]
+                obs_array = env.set_init_state(init_states_batch, id=np.arange(len(valid_indices)))
+                obs_list = [obs_array[i] for i in range(batch_size)]
+            else:
+                # Fallback to reset
+                obs_array = env.reset()
+                obs_list = [obs_array[i] for i in range(batch_size)]
             
             # Action buffers for each env
             action_plans = [collections.deque() for _ in range(batch_size)]
@@ -328,7 +334,8 @@ def eval_libero_turbo(args: Args) -> None:
             while t < max_steps + args.num_steps_wait and not all(done_flags):
                 # Wait for objects to stabilize
                 if t < args.num_steps_wait:
-                    actions = [LIBERO_DUMMY_ACTION for _ in range(batch_size)]
+                    # Always pass num_envs actions (pad with dummy for unused envs)
+                    actions = [LIBERO_DUMMY_ACTION for _ in range(num_envs)]
                     results = env.step(actions)
                     obs_list = [results[0][i] for i in range(batch_size)]
                     t += 1
@@ -370,10 +377,10 @@ def eval_libero_turbo(args: Args) -> None:
                     if timing:
                         timing.add_infer(time.monotonic() - infer_start, len(need_actions))
                 
-                # Execute actions
+                # Execute actions - always pass num_envs actions (pad with dummy for unused envs)
                 actions = []
-                for i in range(batch_size):
-                    if done_flags[i]:
+                for i in range(num_envs):
+                    if i >= batch_size or done_flags[i]:
                         actions.append(LIBERO_DUMMY_ACTION)
                     elif action_plans[i]:
                         actions.append(action_plans[i].popleft().tolist())
@@ -450,9 +457,53 @@ def eval_libero_turbo(args: Args) -> None:
             f.write(timing.report())
     
     logging.info(f"Results saved to {results_file}")
+    return final_rate
+
+
+ALL_SUITES = ["libero_spatial", "libero_object", "libero_goal", "libero_10", "libero_90"]
+
+
+def run_all_suites(args: Args) -> dict[str, float]:
+    """Run evaluation on all LIBERO suites."""
+    results = {}
+    for suite in ALL_SUITES:
+        logging.info(f"\n{'='*70}")
+        logging.info(f"Starting suite: {suite}")
+        logging.info(f"{'='*70}\n")
+        
+        # Create a copy of args with updated suite name
+        suite_args = dataclasses.replace(args, task_suite_name=suite)
+        success_rate = eval_libero_turbo(suite_args)
+        results[suite] = success_rate
+    
+    # Print summary
+    logging.info(f"\n{'='*70}")
+    logging.info("ALL SUITES SUMMARY")
+    logging.info(f"{'='*70}")
+    for suite, rate in results.items():
+        logging.info(f"  {suite}: {rate:.2%}")
+    avg_rate = sum(results.values()) / len(results)
+    logging.info(f"  AVERAGE: {avg_rate:.2%}")
+    logging.info(f"{'='*70}\n")
+    
+    # Save summary
+    summary_file = pathlib.Path(args.results_path) / "all_suites_summary.txt"
+    with open(summary_file, "w") as f:
+        f.write(f"TURBO LIBERO Evaluation Summary\n")
+        f.write(f"Config: {args.config_name}\n")
+        f.write(f"Settings: num_envs={args.num_envs}, replan={args.replan_steps}, denoise={args.num_denoise_steps}\n\n")
+        for suite, rate in results.items():
+            f.write(f"{suite}: {rate:.4f}\n")
+        f.write(f"\nAVERAGE: {avg_rate:.4f}\n")
+    
+    return results
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, force=True)
     args = tyro.cli(Args)
-    eval_libero_turbo(args)
+    
+    if args.all_suites:
+        run_all_suites(args)
+    else:
+        eval_libero_turbo(args)

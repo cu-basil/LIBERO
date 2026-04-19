@@ -52,6 +52,9 @@ class Args:
     num_steps_wait: int = 10
     num_trials_per_task: int = 50
     
+    # Multi-suite mode
+    all_suites: bool = False  # Run all 5 LIBERO suites
+    
     # Output
     video_out_path: str = "data/libero/videos"
     results_path: str = "docs/results"
@@ -328,9 +331,48 @@ def eval_libero_native(args: Args) -> None:
             f.write(timing.report())
     
     logging.info(f"Results saved to {results_file}")
+    return final_rate
+
+
+ALL_SUITES = ["libero_spatial", "libero_object", "libero_goal", "libero_10", "libero_90"]
+
+
+def run_all_suites(args: Args) -> dict[str, float]:
+    """Run evaluation on all LIBERO suites."""
+    results = {}
+    for suite in ALL_SUITES:
+        logging.info(f"\n{'='*70}")
+        logging.info(f"Starting suite: {suite}")
+        logging.info(f"{'='*70}\n")
+        
+        suite_args = dataclasses.replace(args, task_suite_name=suite)
+        success_rate = eval_libero_native(suite_args)
+        results[suite] = success_rate
+    
+    logging.info(f"\n{'='*70}")
+    logging.info("ALL SUITES SUMMARY")
+    logging.info(f"{'='*70}")
+    for suite, rate in results.items():
+        logging.info(f"  {suite}: {rate:.2%}")
+    avg_rate = sum(results.values()) / len(results)
+    logging.info(f"  AVERAGE: {avg_rate:.2%}")
+    
+    summary_file = pathlib.Path(args.results_path) / "all_suites_native_summary.txt"
+    with open(summary_file, "w") as f:
+        f.write(f"Native LIBERO Evaluation Summary\n")
+        f.write(f"Config: {args.config_name}\n\n")
+        for suite, rate in results.items():
+            f.write(f"{suite}: {rate:.4f}\n")
+        f.write(f"\nAVERAGE: {avg_rate:.4f}\n")
+    
+    return results
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, force=True)
     args = tyro.cli(Args)
-    eval_libero_native(args)
+    
+    if args.all_suites:
+        run_all_suites(args)
+    else:
+        eval_libero_native(args)
