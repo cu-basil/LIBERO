@@ -21,3 +21,7 @@ logs/
 *.mp4
 libero.egg-info/
 .vscode/
+
+# OpenPI Integration Environments and Test Scripts
+.venv_converter/
+replicate_algo_tests.sh

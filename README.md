@@ -207,3 +207,32 @@ If you find **LIBERO** to be useful in your own research, please consider citing
 |------------------|-------------------------------------------------------------------------------------------------------------------------------------|
 | Codebase         | [MIT License](LICENSE)                                                                                                                      |
 | Datasets         | [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/legalcode)                 |
+
+---
+## Integrating OpenPI ($\pi_0$ / $\pi_{0.5}$) Checkpoints
+
+We have integrated Physical Intelligence's **OpenPI** repository as a submodule to natively evaluate the $\pi_{0.5}$ base model directly onto our LIBERO task suites without relying on their Docker containers or their default JAX interference stack. 
+
+### Submodule Setup
+Since `openpi` is integrated as a git submodule, if you clone this repository freshly, you must run:
+```bash
+git submodule update --init --recursive
+```
+
+### Virtual Environments
+Due to dependency conflicts between `robosuite`/`mujoco` requirements and OpenPI's latest HuggingFace/JAX patches, the evaluation stack employs two distinct `uv` environments:
+1. `.venv312` - Contains our main LIBERO stack, `robosuite`, and the simulation client.
+2. `.venv_converter` - An isolated environment used only to host OpenPI's `serve_policy` PyTorch server and convert their JAX-native `.ocdbt` checkpoints to `model.safetensors`.
+
+### Running Evaluation 
+We've abstracted the OpenPI evaluation loop out of their repo into our native `openpi_integration` folder. To evaluate the 12GB checkpoint headlessly via EGL (and skip any "Address already in use" websocket locks), run the native bash script:
+
+```bash
+./openpi_integration/evaluate_openpi_libero.sh
+```
+
+**What this does:**
+1. Spins up the $\pi_{0.5}$ websocket server locally binding to port 8011 inside `.venv_converter`.
+2. Delays for 40 seconds to allow the heavy 12GB weights to initialize fully in PyTorch.
+3. Automatically launches the LIBERO headless client directly in `.venv312` and pushes tasks through the server.
+4. Results are simultaneously teed to `.cache/libero_client_eval.log` and the server process is aggressively cleaned up when done.
