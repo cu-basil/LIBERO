@@ -23,7 +23,8 @@ class OnTheGroundPanda(ManipulatorModel):
 
     @property
     def default_base(self):
-        return None
+        # Use NullBase for robots without a mount (robosuite 1.5.x compatibility)
+        return "NullBase"
 
     @property
     def default_gripper(self):

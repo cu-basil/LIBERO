@@ -33,6 +33,7 @@ import time
 from typing import Optional
 
 import imageio
+import jax
 from libero.libero import benchmark
 from libero.libero import get_libero_path
 from libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv, DummyVectorEnv
@@ -227,6 +228,84 @@ def create_batched_element(imgs, wrist_imgs, states, prompt: str) -> dict:
     }
 
 
+# Batched inference - single forward pass for N observations
+def batched_infer(policy, imgs, wrist_imgs, states, prompt: str, sample_kwargs: dict = None) -> np.ndarray:
+    """
+    True batched inference - single forward pass for N observations.
+    Mirrors policy.infer() but handles batch dimension properly.
+    Returns: (N, action_horizon, 7) array of actions
+    """
+    from openpi.models import model as _model
+    
+    batch_size = len(imgs)
+    
+    # Step 1: Transform each element individually (matches policy.infer)
+    transformed_list = []
+    for i in range(batch_size):
+        # Create input dict matching expected format
+        element = {
+            "observation/image": imgs[i],
+            "observation/wrist_image": wrist_imgs[i],
+            "observation/state": states[i],
+            "prompt": prompt,
+        }
+        # Copy to avoid in-place modifications (matches policy.infer)
+        inputs = jax.tree.map(lambda x: x, element)
+        inputs = policy._input_transform(inputs)
+        transformed_list.append(inputs)
+    
+    # Step 2: Stack all transformed inputs into batched tensors
+    def tree_stack_to_torch(transformed_list):
+        """Stack list of dicts into batched torch tensors."""
+        first = transformed_list[0]
+        result = {}
+        for key in first.keys():
+            vals = [t[key] for t in transformed_list]
+            if isinstance(vals[0], dict):
+                # Nested dict (image, image_mask)
+                result[key] = {}
+                for subkey in vals[0].keys():
+                    subvals = [v[subkey] for v in vals]
+                    arr = np.stack([np.asarray(v) for v in subvals])
+                    result[key][subkey] = torch.from_numpy(arr).to(policy._pytorch_device)
+            else:
+                # Regular array (state, tokenized_prompt, etc.)
+                arr = np.stack([np.asarray(v) for v in vals])
+                result[key] = torch.from_numpy(arr).to(policy._pytorch_device)
+        return result
+    
+    batched = tree_stack_to_torch(transformed_list)
+    
+    # Step 3: Create Observation from batched dict
+    observation = _model.Observation.from_dict(batched)
+    
+    # Step 4: Sample actions using policy's sample_kwargs as base
+    kwargs = dict(policy._sample_kwargs)
+    if sample_kwargs:
+        kwargs.update(sample_kwargs)
+    
+    actions = policy._sample_actions(policy._pytorch_device, observation, **kwargs)
+    
+    # Step 5: Convert to numpy (no batch dim removal since we want all B results)
+    actions = np.asarray(actions.detach().cpu())  # (B, action_horizon, action_dim)
+    
+    # Get states from batched input for output transform (Unnormalize needs both state and actions)
+    states_np = np.asarray(batched["state"].detach().cpu())  # (B, state_dim)
+    
+    # Step 6: Apply output transform to each element
+    # Output transform includes Unnormalize which requires state + actions, then LiberoOutputs slices actions
+    results = []
+    for i in range(batch_size):
+        element_output = {
+            "state": states_np[i],  # Unnormalize requires this
+            "actions": actions[i],  # (action_horizon, action_dim)
+        }
+        element_output = policy._output_transform(element_output)
+        results.append(element_output["actions"])  # (action_horizon, 7)
+    
+    return np.stack(results)  # (B, action_horizon, 7)
+
+
 def eval_libero_turbo(args: Args) -> None:
     """Run TURBO LIBERO evaluation."""
     
@@ -261,6 +340,29 @@ def eval_libero_turbo(args: Args) -> None:
     
     load_time = time.monotonic() - load_start
     logging.info(f"Model loaded in {load_time:.2f}s")
+    
+    # ========================================================================
+    # Warm up model with various batch sizes to trigger autotuning
+    # ========================================================================
+    if args.num_envs > 1:
+        logging.info("Warming up model for batched inference...")
+        warmup_start = time.monotonic()
+        dummy_img = np.zeros((args.resize_size, args.resize_size, 3), dtype=np.uint8)
+        dummy_state = np.zeros(8, dtype=np.float32)
+        dummy_prompt = "pick up the object"
+        
+        # Warm up with batch sizes 1, 2, 4, 8 (common sizes during eval)
+        for batch_size in [1, 2, 4, min(8, args.num_envs)]:
+            try:
+                imgs = [dummy_img] * batch_size
+                wrist_imgs = [dummy_img] * batch_size
+                states = [dummy_state] * batch_size
+                _ = batched_infer(policy, imgs, wrist_imgs, states, dummy_prompt,
+                                 sample_kwargs={"num_steps": args.num_denoise_steps})
+            except Exception as e:
+                logging.debug(f"Warmup batch size {batch_size} failed: {e}")
+        
+        logging.info(f"Warmup completed in {time.monotonic() - warmup_start:.1f}s")
     
     # ========================================================================
     # Initialize benchmark
@@ -358,21 +460,45 @@ def eval_libero_turbo(args: Args) -> None:
                     for idx, i in enumerate(need_actions):
                         replay_images[i].append(imgs[idx])
                     
-                    # Batched inference
+                    # Inference for envs that need new action plans
                     infer_start = time.monotonic()
                     
-                    # Handle batched input - need to iterate for now as policy expects single obs
-                    # TODO: True batched inference requires policy modification
-                    for idx, i in enumerate(need_actions):
-                        element = {
-                            "observation/image": imgs[idx],
-                            "observation/wrist_image": wrist_imgs[idx],
-                            "observation/state": states[idx],
-                            "prompt": task_description,
-                        }
-                        result = policy.infer(element)
-                        action_chunk = result["actions"]
-                        action_plans[i].extend(action_chunk[:args.replan_steps])
+                    if len(need_actions) > 1:
+                        # TRUE Batched inference - single forward pass for all envs
+                        try:
+                            all_actions = batched_infer(
+                                policy, imgs, wrist_imgs, states, task_description,
+                                sample_kwargs={"num_steps": args.num_denoise_steps}
+                            )  # (B, action_horizon, 7)
+                            
+                            for idx, i in enumerate(need_actions):
+                                action_chunk = all_actions[idx]  # (action_horizon, 7)
+                                action_plans[i].extend(action_chunk[:args.replan_steps])
+                        except Exception as e:
+                            # Fallback to sequential if batched fails
+                            logging.warning(f"Batched inference failed: {e}, falling back to sequential")
+                            for idx, i in enumerate(need_actions):
+                                element = {
+                                    "observation/image": imgs[idx],
+                                    "observation/wrist_image": wrist_imgs[idx],
+                                    "observation/state": states[idx],
+                                    "prompt": task_description,
+                                }
+                                result = policy.infer(element)
+                                action_chunk = result["actions"]
+                                action_plans[i].extend(action_chunk[:args.replan_steps])
+                    else:
+                        # Sequential for single env (no batching benefit)
+                        for idx, i in enumerate(need_actions):
+                            element = {
+                                "observation/image": imgs[idx],
+                                "observation/wrist_image": wrist_imgs[idx],
+                                "observation/state": states[idx],
+                                "prompt": task_description,
+                            }
+                            result = policy.infer(element)
+                            action_chunk = result["actions"]
+                            action_plans[i].extend(action_chunk[:args.replan_steps])
                     
                     if timing:
                         timing.add_infer(time.monotonic() - infer_start, len(need_actions))
