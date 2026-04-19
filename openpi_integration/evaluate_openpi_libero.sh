@@ -19,9 +19,19 @@ head -n 20 .cache/server.log
 echo "Starting OpenPI Client identically from .venv312 on port 8011..."
 source .venv312/bin/activate
 export PYTHONPATH=$PYTHONPATH:$PWD/openpi/src:$PWD/third_party/libero:$PWD/openpi/packages
-export CLIENT_ARGS="--args.task-suite-name libero_10 --args.port 8011"
 
-echo "Collecting simulation results... saving output to .cache/libero_client_eval.log"
-MUJOCO_GL=egl python openpi_integration/libero_client_eval.py $CLIENT_ARGS | tee .cache/libero_client_eval.log
+mkdir -p docs/results
+
+suites=("libero_spatial" "libero_object" "libero_goal" "libero_10" "libero_90")
+
+for suite in "${suites[@]}"; do
+    echo "================================================="
+    echo "Starting evaluation for suite: $suite"
+    echo "================================================="
+    CLIENT_ARGS="--args.task-suite-name $suite --args.port 8011"
+    
+    echo "Collecting simulation results... saving output to docs/results/${suite}.log"
+    MUJOCO_GL=egl python openpi_integration/libero_client_eval.py $CLIENT_ARGS | tee docs/results/${suite}.log
+done
 
 # Cleanup handled by trap
