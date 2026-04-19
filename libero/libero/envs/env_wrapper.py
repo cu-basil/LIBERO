@@ -44,7 +44,15 @@ class ControlEnv:
             bddl_file_name
         ), f"[error] {bddl_file_name} does not exist!"
 
-        controller_configs = suite.load_controller_config(default_controller=controller)
+        # robosuite 1.5.x uses composite controllers with body_parts
+        part_config = suite.load_part_controller_config(default_controller=controller)
+        part_config["gripper"] = {"type": "GRIP"}
+        controller_configs = {
+            "type": "BASIC",
+            "body_parts": {
+                "right": part_config,
+            },
+        }
 
         problem_info = BDDLUtils.get_problem_info(bddl_file_name)
         # Check if we're using a multi-armed environment and use env_configuration argument if so
@@ -131,7 +139,8 @@ class ControlEnv:
         self.env.reset_from_xml_string(xml_string)
 
     def seed(self, seed):
-        self.env.seed(seed)
+        """Set random seed for reproducibility."""
+        self.env.set_random_seed(seed)
 
     def set_init_state(self, init_state):
         return self.regenerate_obs_from_state(init_state)

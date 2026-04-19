@@ -3,7 +3,7 @@ import os
 import robosuite.utils.transform_utils as T
 
 from copy import deepcopy
-from robosuite.environments.manipulation.single_arm_env import SingleArmEnv
+from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.placement_samplers import SequentialCompositeSampler
 from robosuite.utils.observables import Observable, sensor
@@ -34,7 +34,7 @@ def register_problem(target_class):
 import time
 
 
-class BDDLBaseDomain(SingleArmEnv):
+class BDDLBaseDomain(ManipulationEnv):
     """
     A base domain for parsing bddl files.
     """
@@ -136,7 +136,7 @@ class BDDLBaseDomain(SingleArmEnv):
             robots=robots,
             env_configuration=env_configuration,
             controller_configs=controller_configs,
-            mount_types="default",
+            base_types="default",
             gripper_types=gripper_types,
             initialization_noise=initialization_noise,
             use_camera_obs=use_camera_obs,
@@ -147,6 +147,7 @@ class BDDLBaseDomain(SingleArmEnv):
             render_visual_mesh=render_visual_mesh,
             render_gpu_device_id=render_gpu_device_id,
             control_freq=control_freq,
+            lite_physics=True,
             horizon=horizon,
             ignore_done=ignore_done,
             hard_reset=hard_reset,
@@ -159,7 +160,8 @@ class BDDLBaseDomain(SingleArmEnv):
             **kwargs,
         )
 
-    def seed(self, seed):
+    def set_random_seed(self, seed):
+        """Set numpy random seed. Use this instead of seed() for robosuite 1.5.x compat."""
         np.random.seed(seed)
 
     def reward(self, action=None):
