@@ -9,6 +9,7 @@ from libero.lifelong.models.base_policy import BasePolicy
 from libero.lifelong.models.policy_head import *
 
 
+
 ###############################################################################
 #
 # A model handling extra input modalities besides images at time t.
@@ -281,6 +282,21 @@ class BCTransformerPolicy(BasePolicy):
         return encoded
 
     def forward(self, data):
+        import torch as _t
+        import robomimic.utils.tensor_utils as _TU
+        # Convert uint8 HWC images to float32 CHW (catches direct calls like compute_flops)
+        for _k, _v in list(data.get('obs', {}).items()):
+            if _t.is_tensor(_v):
+                if _v.dim() == 5 and _v.shape[-1] <= 4:  # (B,T,H,W,C) -> (B,T,C,H,W)
+                    if _v.dtype == _t.uint8:
+                        _v = _v.float() / 255.0
+                    _v = _v.permute(0, 1, 4, 2, 3).contiguous()
+                    data['obs'][_k] = _v
+                elif _v.dtype == _t.uint8:
+                    _v = _v.float() / 255.0
+                    data['obs'][_k] = _v
+        # FINAL CAST: any remaining double tensors -> float32
+        data = _TU.map_tensor(data, lambda x: x.float() if _t.is_tensor(x) and x.dtype == _t.float64 else x)
         x = self.spatial_encode(data)
         x = self.temporal_encode(x)
         dist = self.policy_head(x)

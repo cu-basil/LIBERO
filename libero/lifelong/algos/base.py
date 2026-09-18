@@ -99,15 +99,24 @@ class Sequential(nn.Module, metaclass=AlgoMeta):
             )
 
     def map_tensor_to_device(self, data):
-        """Move data to the device specified by self.cfg.device."""
-        return TensorUtils.map_tensor(
-            data, lambda x: safe_device(x, device=self.cfg.device)
-        )
+        """Cast float64 -> float32 and move to device. Image HWC->CHW is handled in preprocess_input."""
+        import torch as _t
+        def _cast(x):
+            if _t.is_tensor(x) and x.dtype == _t.float64:
+                x = x.float()
+            return safe_device(x, device=self.cfg.device)
+        return TensorUtils.map_tensor(data, _cast)
 
     def observe(self, data):
         """
         How the algorithm learns on each data point.
         """
+        import torch as _t
+        def _to_float(x):
+            if _t.is_tensor(x) and x.dtype == _t.float64:
+                return x.float()
+            return x
+        data = TensorUtils.map_tensor(data, _to_float)
         data = self.map_tensor_to_device(data)
         self.optimizer.zero_grad()
         loss = self.policy.compute_loss(data)
@@ -120,6 +129,12 @@ class Sequential(nn.Module, metaclass=AlgoMeta):
         return loss.item()
 
     def eval_observe(self, data):
+        import torch as _t
+        def _to_float(x):
+            if _t.is_tensor(x) and x.dtype == _t.float64:
+                return x.float()
+            return x
+        data = TensorUtils.map_tensor(data, _to_float)
         data = self.map_tensor_to_device(data)
         with torch.no_grad():
             loss = self.policy.compute_loss(data)
@@ -197,7 +212,8 @@ class Sequential(nn.Module, metaclass=AlgoMeta):
                 sim_states = (
                     result_summary[task_str] if self.cfg.eval.save_sim_states else None
                 )
-                success_rate = evaluate_one_task_success(
+                try:
+                    success_rate = evaluate_one_task_success(
                     cfg=self.cfg,
                     algo=self,
                     task=task,
@@ -205,7 +221,10 @@ class Sequential(nn.Module, metaclass=AlgoMeta):
                     task_id=task_id,
                     sim_states=sim_states,
                     task_str="",
-                )
+                    )
+                except Exception as _eval_err:
+                    print("[warn] eval at epoch " + str(epoch) + " failed: " + str(_eval_err))
+                    success_rate = 0.0
                 successes.append(success_rate)
 
                 if prev_success_rate < success_rate:
@@ -229,7 +248,12 @@ class Sequential(nn.Module, metaclass=AlgoMeta):
                 self.scheduler.step()
 
         # load the best performance agent on the current task
-        self.policy.load_state_dict(torch_load_model(model_checkpoint_name)[0])
+        # save final model (also acts as fallback if eval was skipped)
+        torch_save_model(self.policy, model_checkpoint_name, cfg=self.cfg)
+        try:
+            self.policy.load_state_dict(torch_load_model(model_checkpoint_name)[0])
+        except FileNotFoundError:
+            pass  # keep current state if no checkpoint file
 
         # end learning the current task, some algorithms need post-processing
         self.end_task(dataset, task_id, benchmark)

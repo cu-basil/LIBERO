@@ -85,10 +85,7 @@ class BasePolicy(nn.Module, metaclass=PolicyMeta):
         raise NotImplementedError
 
     def _get_img_tuple(self, data):
-        img_tuple = tuple(
-            [data["obs"][img_name] for img_name in self.image_encoders.keys()]
-        )
-        return img_tuple
+        return tuple(data["obs"][img_name] for img_name in self.image_encoders.keys())
 
     def _get_aug_output_dict(self, out):
         img_dict = {
@@ -98,6 +95,17 @@ class BasePolicy(nn.Module, metaclass=PolicyMeta):
         return img_dict
 
     def preprocess_input(self, data, train_mode=True):
+        # Convert uint8 HWC images to float32 CHW before augmentation/forward
+        import torch as _torch
+        for _k, _v in list(data.get('obs', {}).items()):
+            if _torch.is_tensor(_v) and _v.dtype == _torch.uint8:
+                _v = _v.float() / 255.0
+                if _v.dim() == 5:       # (B, T, H, W, C) -> (B, T, C, H, W)
+                    _v = _v.permute(0, 1, 4, 2, 3).contiguous()
+                elif _v.dim() == 4:     # (B, H, W, C) -> (B, C, H, W)
+                    _v = _v.permute(0, 3, 1, 2).contiguous()
+                data['obs'][_k] = _v
+
         if train_mode:  # apply augmentation
             if self.cfg.train.use_augmentation:
                 img_tuple = self._get_img_tuple(data)
